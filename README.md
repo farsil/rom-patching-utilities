@@ -3,21 +3,23 @@
 This repository contains a set of command-line utilities that assist with
 patching ROM files:
 
-- *behead*: removes header from ROMs (first 512 bytes)
-- *bpspatch*: applies a BPS patch to a headerless ROM
+- *behead*: removes header from ROMs (first 512 bytes).
+- *bpspatch*: applies a BPS patch to a headerless ROM.
 
-All commands can read input from stdin and can write to stdout so they are
-easy to chain:
+All commands can read input from stdin and can write to stdout so that they 
+are easy to chain:
 
-````sh
-$ behead -i headered.smc | bpspatch patch.bps -o patched.smc
+```sh
+behead -i headered.smc | bpspatch patch.bps -o patched.smc
 ```
+
+Tip: if patching fails due to CRC mismatch, try executing `behead` first.
 
 # Build
 
 To build all utilities execute:
 
-````sh
+```sh
 make
 ```
 
@@ -44,5 +46,4 @@ make uninstall
 
 # Usage
 
-All individual utilities accept a `-h` argument that provides usage help.
-
+All utilities accept a `-h` argument that will display the usage string.

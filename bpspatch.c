@@ -4,6 +4,8 @@
 #include <errno.h>
 #include <strings.h>
 
+#include "futils.h"
+
 #define SOURCE_READ 0
 #define TARGET_READ 1
 #define SOURCE_COPY 2
@@ -70,54 +72,6 @@ uint32_t crc32(uint8_t *data, size_t size) {
     return ~crc;
 }
 
-size_t fsize(FILE *stream) {
-    long curpos = ftell(stream);
-    if (curpos == -1L) {
-        return 0;
-    }
-
-    if (fseek(stream, 0L, SEEK_END)) {
-        return 0;
-    }
-
-    long endpos = ftell(stream);
-    if (endpos == -1L) {
-        return 0;
-    }
-
-    if (fseek(stream, curpos, SEEK_SET)) {
-        return 0;
-    }
-
-    // not portable on the few systems where LONG_MAX > SIZE_MAX
-    return endpos;
-}
-
-void* load(size_t size, FILE *stream) {
-    void *data = malloc(size);
-    size_t offset = 0;
-    size_t read, count;
-
-    do {
-        count = size - offset < 4096 ? size - offset : 4096;
-        read = fread(data + offset, sizeof *data, count, stream);
-        offset += read;
-    } while (read == count && offset < size);
-
-    return data;
-}
-
-void save(void *data, size_t size, FILE *stream) {
-    size_t offset = 0;
-    size_t written, count;
-
-    do {
-        count = size - offset < 4096 ? size - offset : 4096;
-        written = fwrite(data + offset, sizeof *data, count, stream);
-        offset += written;
-    } while (written == count && offset < size);
-}
-
 size_t decode(uint8_t *data, size_t offset, size_t size, size_t *value) {
     size_t shift = 0;
     size_t read = 0;
@@ -145,7 +99,7 @@ bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
         goto end;
     }
 
-    patch_buf = load(patch_size, patch_fp);
+    patch_buf = fload(patch_size, patch_fp);
     if (ferror(patch_fp)) {
         perror("Unable to read from patch file");
         goto end;
@@ -165,7 +119,7 @@ bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
     // skip metadata
     patch_off += metadata_size;
 
-    source_buf = load(source_size, source_fp);
+    source_buf = fload(source_size, source_fp);
     if (ferror(source_fp)) {
         perror("Unable to read from source file");
         goto end;
@@ -253,7 +207,7 @@ bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
         goto end;
     }
 
-    save(target_buf, target_size, target_fp);
+    fsave(target_buf, target_size, target_fp);
     if (ferror(target_fp)) {
         perror("Unable to write to target file");
         goto end;
@@ -283,7 +237,7 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "-i") == 0 && i + 1 < argc) {
             source = fopen(argv[++i], "rb");
             if (source == NULL) {
-                fprintf(stderr, "Unable to open source file %s: %s\n", 
+                fprintf(stderr, "Unable to open source file %s: %s\n",
                         argv[i], strerror(errno));
                 goto end;
             }
@@ -291,7 +245,7 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             target = fopen(argv[++i], "wb");
             if (target == NULL) {
-                fprintf(stderr, "Unable to open target file %s: %s\n", 
+                fprintf(stderr, "Unable to open target file %s: %s\n",
                         argv[i], strerror(errno));
                 goto end;
             }
@@ -299,7 +253,7 @@ int main(int argc, char *argv[]) {
         else if (i == argc - 1) {
             patch = fopen(argv[i], "rb");
             if (patch == NULL) {
-                fprintf(stderr, "Unable to open patch file %s: %s\n", 
+                fprintf(stderr, "Unable to open patch file %s: %s\n",
                         argv[i], strerror(errno));
                 goto end;
             }
@@ -326,3 +280,4 @@ end:
     if (target != stdout) fclose(target);
     return exitcode;
 }
+

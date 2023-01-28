@@ -78,63 +78,154 @@ void* load(size_t size, FILE *stream) {
 /* } */
 
 uint32_t peek_uint24(uint8_t *buf) {
-    return (buf[0] << 16) & 0xFF0000 + (buf[1] << 8) & 0xFF00 + buf[2];
+    return ((buf[0] << 16) & 0xFF0000) + ((buf[1] << 8) & 0xFF00) + buf[2];
 }
 
 uint16_t peek_uint16(uint8_t *buf) {
-    return (buf[0] << 8) & 0xFF00 + buf[1];
+    return ((buf[0] << 8) & 0xFF00) + buf[1];
 }
 
-bool pass1(uint8_t *patch_buf, size_t patch_size, size_t *target_size) {
-    *target_size = 0;
+size_t pass1(uint8_t *patch_buf, size_t patch_size) {
+    uint8_t *patch_end = patch_buf + patch_size;
+    size_t target_size = 0;
 
     if (memcmp(patch_buf, "PATCH", 5) != 0) {
         fputs("Invalid or corrupt patch file\n", stderr);
-        return false;
+        return 0;
     }
+    patch_buf += 5;
 
-    size_t patch_off = 5;
-    while (memcmp(patch_buf + patch_off, "EOF", 3) != 0) {
-        if (patch_off + 5 >= patch_size) {
+    while (true) {
+        if (patch_buf + 3 > patch_end) {
             fputs("Invalid patch record: out of bounds\n", stderr);
-            return false;
+            return 0;
+        }
+        uint32_t offset = peek_uint24(patch_buf);
+        patch_buf += 3;
+
+        // checks for the string "EOF"
+        if (offset == 0x454F46) {
+            if (patch_buf + 3 <= patch_end) {
+                // if present, the 3 bytes after EOF hold the target file size
+                return peek_uint24(patch_buf);
+            }
+            return target_size;
         }
 
-        // big endian
-        uint32_t offset = peek_uint24(patch_buf + patch_off);
-        patch_off += 3;
-        uint16_t len = peek_uint16(patch_buf + patch_off);
-        patch_off += 2;
-        size_t end_offset;
+        if (patch_buf + 2 > patch_end) {
+            fputs("Invalid patch record: out of bounds\n", stderr);
+            return 0;
+        }
+        uint16_t len = peek_uint16(patch_buf);
+        patch_buf += 2;
 
         if (len == IPS_RECORD_RLE) {
-            if (patch_off + 3 >= patch_size) {
+            if (patch_buf + 3 > patch_end) {
                 fputs("Invalid patch record: out of bounds\n", stderr);
-                return false;
-            }
-            uint16_t rle_len = peek_uint16(patch_buf + patch_off);
-            end_offset = offset + rle_len;
-            patch_off += 3;
+                return 0;
+            }   
+            len = peek_uint16(patch_buf);
+            patch_buf += 3;
         } else {
-            if (patch_off + len >= patch_size) {
+            if (patch_buf + len > patch_end) {
                 fputs("Invalid patch record: out of bounds\n", stderr);
-                return false;
-            }
-            end_offset = offset + len;
-            patch_off += len;
+                return 0;
+            }   
+            patch_buf += len;
         }
-        
-        *target_size = *target_size > end_offset ? *target_size : end_offset;
+
+        target_size = target_size > offset + len ? target_size : offset + len;
     }
 
-    patch_off += 3;
+    /* while (patch_buf < patch_end) { */
+    /*  */
+    /*     if (patch_buf + 3 > patch_end) { */
+    /*         fputs("Invalid patch record: out of bounds\n", stderr); */
+    /*         return 0; */
+    /*     } */
+    /*  */
+    /*     uint32_t offset = peek_uint24(patch_buf); */
+    /*     patch_buf += 3; */
+    /*  */
+    /*     // EOF */
+    /*     if (offset == 0x454F46) { */
+    /*         if (patch_buf < patch_end) { */
+    /*             return peek_uint24(patch_buf); */
+    /*         } */
+    /*         return target_size; */
+    /*     } */
+    /*  */
+    /*     uint16_t len = peek_uint16(patch_buf); */
+    /*     patch_buf += 2; */
+    /*  */
+    /*     if (patch_buf + 2 > patch_end) { */
+    /*         fputs("Invalid patch record: out of bounds\n", stderr); */
+    /*         return 0; */
+    /*     } */
+    /*     size_t end_offset; */
+    /*     if (len == IPS_RECORD_RLE) { */
+    /*         if (patch_buf + 3 > patch_end) { */
+    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
+    /*             return 0; */
+    /*         }    */
+    /*         uint16_t rle_len = peek_uint16(patch_buf); */
+    /*         end_offset = offset + rle_len; */
+    /*         patch_buf += 3; */
+    /*     } else { */
+    /*         if (patch_buf + len > patch_end) { */
+    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
+    /*             return 0; */
+    /*         }    */
+    /*         end_offset = offset + len; */
+    /*         patch_buf += len; */
+    /*     } */
+    /*  */
+    /*     target_size = target_size > end_offset ? target_size : end_offset; */
+    /* } */
 
-    // if present, the three bytes after EOF hold the target file size
-    if (patch_size >= patch_off + 3) {
-        *target_size = peek_uint24(patch_buf + patch_off);
-    }
+    /* return 0; */
+    /* while (memcmp(patch_buf + patch_off, "EOF", 3) != 0) { */
+    /*     if (patch_off + 5 >= patch_size) { */
+    /*         fputs("Invalid patch record: out of bounds\n", stderr); */
+    /*         return 0; */
+    /*     } */
+    /*  */
+    /*     // big endian */
+    /*     uint32_t offset = peek_uint24(patch_buf + patch_off); */
+    /*     patch_off += 3; */
+    /*     uint16_t len = peek_uint16(patch_buf + patch_off); */
+    /*     patch_off += 2; */
+    /*     size_t end_offset; */
+    /*  */
+    /*         fprintf(stderr, "%zu %zu %zu\n", patch_off, len, patch_size); */
+    /*     if (len == IPS_RECORD_RLE) { */
+    /*         if (patch_off + 3 >= patch_size) { */
+    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
+    /*             return 0; */
+    /*         } */
+    /*         uint16_t rle_len = peek_uint16(patch_buf + patch_off); */
+    /*         end_offset = offset + rle_len; */
+    /*         patch_off += 3; */
+    /*     } else { */
+    /*         if (patch_off + len >= patch_size) { */
+    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
+    /*             return 0; */
+    /*         } */
+    /*         end_offset = offset + len; */
+    /*         patch_off += len; */
+    /*     } */
+    /*      */
+    /*     target_size = target_size > end_offset ? target_size : end_offset; */
+    /* } */
 
-    return true;
+    /* patch_off += 3; */
+    /*  */
+    /* // if present, the three bytes after EOF hold the target file size */
+    /* if (patch_size >= patch_off + 3) { */
+    /*     target_size = peek_uint24(patch_buf + patch_off); */
+    /* } */
+    /*  */
+    /* return target_size; */
 }
 
 bool pass2(uint8_t *patch_buf, size_t patch_size, uint8_t *target_buf, size_t target_size) {
@@ -185,11 +276,16 @@ bool ipspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
         goto end;
     }
 
-    size_t target_size;
-    success = pass1(patch_buf, patch_size, &target_size);
+    size_t target_size = pass1(patch_buf, patch_size);
+    fprintf(stderr, "RETVAL: %lu\n", target_size);
+    if (target_size == 0) {
+        goto end;
+    }
 
-    target_buf = load(target_size, source_fp);
-    success = pass2(patch_buf, patch_size, target_buf, target_size);
+
+
+    /* target_buf = load(target_size, source_fp); */
+    /* success = pass2(patch_buf, patch_size, target_buf, target_size); */
 
 
     /* size_t target_off = 0; */

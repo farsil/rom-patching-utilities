@@ -74,17 +74,19 @@ uint32_t crc32(uint8_t *data, size_t size) {
 
 size_t decode(uint8_t *data, size_t offset, size_t size, size_t *value) {
     size_t shift = 0;
-    size_t read = 0;
     *value = 0;
 
-    while (offset + read < size) {
-        uint8_t next = data[offset + read++];
+    while (offset < size) {
+        uint8_t next = data[offset++];
         *value += (next ^ 0x80) << shift;
-        if (next & 0x80) return read;
+        if (next & 0x80) return offset;
         shift += 7;
     };
 
-    return read;
+    // reached end of data before encountering the end delimiter
+    // 0 can never be returned normally, an encoded number is at least
+    // 1 byte long due to the end delimiter 0x80
+    return 0;
 }
 
 bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
@@ -105,16 +107,36 @@ bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
         goto end;
     }
 
+    if (patch_size < 4) {
+        fputs("Invalid patch header: out of bounds\n", stderr);
+        goto end;
+    }
     if (memcmp(patch_buf, "BPS1", 4) != 0) {
         fputs("Invalid or corrupt patch file\n", stderr);
         goto end;
     }
-
-    size_t source_size, target_size, metadata_size;
     size_t patch_off = 4;
-    patch_off += decode(patch_buf, patch_off, patch_size, &source_size);
-    patch_off += decode(patch_buf, patch_off, patch_size, &target_size);
-    patch_off += decode(patch_buf, patch_off, patch_size, &metadata_size);
+
+    size_t source_size;
+    patch_off = decode(patch_buf, patch_off, patch_size, &source_size);
+    if (patch_off == 0) {
+        fputs("Invalid patch header: out of bounds\n", stderr);
+        goto end;
+    }
+
+    size_t target_size;
+    patch_off = decode(patch_buf, patch_off, patch_size, &target_size);
+    if (patch_off == 0) {
+        fputs("Invalid patch header: out of bounds\n", stderr);
+        goto end;
+    }
+
+    size_t metadata_size;
+    patch_off = decode(patch_buf, patch_off, patch_size, &metadata_size);
+    if (patch_off == 0) {
+        fputs("Invalid patch header: out of bounds\n", stderr);
+        goto end;
+    }
 
     // skip metadata
     patch_off += metadata_size;
@@ -130,7 +152,11 @@ bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
 
     while (patch_off < patch_size - 12) {
         size_t value;
-        patch_off += decode(patch_buf, patch_off, patch_size, &value);
+        patch_off = decode(patch_buf, patch_off, patch_size, &value);
+        if (patch_off == 0) {
+            fputs("Invalid patch action: out of bounds\n", stderr);
+            goto end;
+        }
 
         size_t action = value & 3;
         size_t len = (value >> 2) + 1;
@@ -159,7 +185,11 @@ bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
                 break;
 
             case SOURCE_COPY:
-                patch_off += decode(patch_buf, patch_off, patch_size, &value);
+                patch_off = decode(patch_buf, patch_off, patch_size, &value);
+                if (patch_off == 0) {
+                    fputs("Invalid TargetCopy: out of bounds\n", stderr);
+                    goto end;
+                }
                 source_off += (value & 1 ? -1 : + 1) * (value >> 1);
                 if (source_off + len > source_size ||
                     output_off + len > target_size) {
@@ -172,7 +202,11 @@ bool bpspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
                 break;
 
             case TARGET_COPY:
-                patch_off += decode(patch_buf, patch_off, patch_size, &value);
+                patch_off = decode(patch_buf, patch_off, patch_size, &value);
+                if (patch_off == 0) {
+                    fputs("Invalid TargetCopy: out of bounds\n", stderr);
+                    goto end;
+                }
                 target_off += (value & 1 ? -1 : + 1) * (value >> 1);
                 if (target_off + len > target_size ||
                     output_off + len > target_size) {

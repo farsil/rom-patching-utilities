@@ -16,12 +16,12 @@ install: all
 	install -m 755 behead bpspatch ipspatch "$(DESTDIR)/bin"
 
 uninstall:
-	rm "$(DESTDIR)/bin/behead"
-	rm "$(DESTDIR)/bin/bpspatch"
-	rm "$(DESTDIR)/bin/ipspatch"
+	rm -f "$(DESTDIR)/bin/behead"
+	rm -f "$(DESTDIR)/bin/bpspatch"
+	rm -f "$(DESTDIR)/bin/ipspatch"
 
 clean:
-	rm behead
-	rm bpspatch
-	rm ipspatch
+	rm -f behead
+	rm -f bpspatch
+	rm -f ipspatch
 

@@ -30,7 +30,7 @@ bool pass1(uint8_t *patch_buf, size_t patch_size, size_t *target_size) {
     *target_size = 0;
 
     if (patch_buf + 5 > patch_end) {
-        fputs("Invalid patch record: out of bounds\n", stderr);
+        fputs("Invalid patch header: out of bounds\n", stderr);
         return false;
     }
     if (memcmp(patch_buf, "PATCH", 5) != 0) {

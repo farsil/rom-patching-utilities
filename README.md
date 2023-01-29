@@ -5,6 +5,7 @@ patching ROM files:
 
 - *behead*: removes header from ROMs (first 512 bytes).
 - *bpspatch*: applies a BPS patch to a headerless ROM.
+- *ipspatch*: applies an IPS patch to a headered or headerless ROM.
 
 All commands can read input from stdin and can write to stdout so that they 
 are easy to chain:
@@ -12,8 +13,6 @@ are easy to chain:
 ```sh
 behead -i headered.smc | bpspatch patch.bps -o patched.smc
 ```
-
-Tip: if patching fails due to CRC mismatch, try executing `behead` first.
 
 # Build
 
@@ -47,3 +46,9 @@ make uninstall
 # Usage
 
 All utilities accept a `-h` argument that will display the usage string.
+
+If BPS patching fails due to CRC mismatch, try executing `behead` first.
+
+IPS patching has no CRC check, you must know beforehand if the patch applies 
+to a headered or headerless ROM.
+

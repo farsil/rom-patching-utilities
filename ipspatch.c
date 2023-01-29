@@ -4,6 +4,8 @@
 #include <errno.h>
 #include <strings.h>
 
+#include "futils.h"
+
 #define IPS_RECORD_RLE 0
 
 const char *usage =
@@ -13,253 +15,113 @@ const char *usage =
 "  -o target_file    target ROM file, standard output if missing\n"
 "  patch_file        patch file in IPS format\n";
 
-size_t fsize(FILE *stream) {
-    long curpos = ftell(stream);
-    if (curpos == -1L) {
-        return 0;
-    }
-
-    if (fseek(stream, 0L, SEEK_END)) {
-        return 0;
-    }
-
-    long endpos = ftell(stream);
-    if (endpos == -1L) {
-        return 0;
-    }
-
-    if (fseek(stream, curpos, SEEK_SET)) {
-        return 0;
-    }
-
-    // not portable on the few systems where LONG_MAX > SIZE_MAX
-    return endpos;
+uint8_t* decode3(uint8_t *buf, size_t *value) {
+    *value = ((buf[0] << 16) & 0xFF0000) + ((buf[1] << 8) & 0xFF00) + buf[2];
+    return buf + 3;
 }
 
-void* load(size_t size, FILE *stream) {
-    void *data = malloc(size);
-    size_t offset = 0;
-    size_t read, count;
-
-    do {
-        count = size - offset < 4096 ? size - offset : 4096;
-        read = fread(data + offset, sizeof *data, count, stream);
-        offset += read;
-    } while (read == count && offset < size);
-
-    return data;
+uint8_t* decode2(uint8_t *buf, size_t *value) {
+    *value = ((buf[0] << 8) & 0xFF00) + buf[1];
+    return buf + 2;
 }
 
-/* void *load(FILE *stream, size_t *size) { */
-/*     *size = 1024 * 1024; */
-/*     void *data = malloc(*size); */
-/*     size_t offset = 0; */
-/*     size_t read, count; */
-/*  */
-/*     while (true) { */
-/*         count = *size - offset < 4096 ? *size - offset : 4096; */
-/*         read = fread(data + offset, sizeof *data, count, stream); */
-/*         offset += read; */
-/*         if (feof(stream) || ferror(stream)) { */
-/*             break; */
-/*         } */
-/*         if (offset == *size) { */
-/*             *size <<= 1; */
-/*             data = realloc(data, *size); */
-/*         } */
-/*     }; */
-/*  */
-/*     if (offset < *size) { */
-/*         *size = offset; */
-/*         data = realloc(data, *size); */
-/*     } */
-/*  */
-/*     return data; */
-/* } */
-
-uint32_t peek_uint24(uint8_t *buf) {
-    return ((buf[0] << 16) & 0xFF0000) + ((buf[1] << 8) & 0xFF00) + buf[2];
-}
-
-uint16_t peek_uint16(uint8_t *buf) {
-    return ((buf[0] << 8) & 0xFF00) + buf[1];
-}
-
-size_t pass1(uint8_t *patch_buf, size_t patch_size) {
+bool pass1(uint8_t *patch_buf, size_t patch_size, size_t *target_size) {
     uint8_t *patch_end = patch_buf + patch_size;
-    size_t target_size = 0;
+    *target_size = 0;
 
+    if (patch_buf + 5 > patch_end) {
+        fputs("Invalid patch record: out of bounds\n", stderr);
+        return false;
+    }
     if (memcmp(patch_buf, "PATCH", 5) != 0) {
-        fputs("Invalid or corrupt patch file\n", stderr);
-        return 0;
+        fputs("Invalid or corrupt patch content\n", stderr);
+        return false;
     }
     patch_buf += 5;
 
     while (true) {
         if (patch_buf + 3 > patch_end) {
             fputs("Invalid patch record: out of bounds\n", stderr);
-            return 0;
+            return false;
         }
-        uint32_t offset = peek_uint24(patch_buf);
-        patch_buf += 3;
+        size_t offset;
+        patch_buf = decode3(patch_buf, &offset);
 
         // checks for the string "EOF"
         if (offset == 0x454F46) {
             if (patch_buf + 3 <= patch_end) {
                 // if present, the 3 bytes after EOF hold the target file size
-                return peek_uint24(patch_buf);
+                decode3(patch_buf, target_size);
             }
-            return target_size;
+            return true;
         }
 
         if (patch_buf + 2 > patch_end) {
             fputs("Invalid patch record: out of bounds\n", stderr);
-            return 0;
+            return false;
         }
-        uint16_t len = peek_uint16(patch_buf);
-        patch_buf += 2;
+        size_t len;
+        patch_buf = decode2(patch_buf, &len);
 
         if (len == IPS_RECORD_RLE) {
             if (patch_buf + 3 > patch_end) {
                 fputs("Invalid patch record: out of bounds\n", stderr);
-                return 0;
-            }   
-            len = peek_uint16(patch_buf);
-            patch_buf += 3;
+                return false;
+            }
+            patch_buf = decode2(patch_buf, &len);
+            // ignore RLE value
+            patch_buf++;
         } else {
             if (patch_buf + len > patch_end) {
                 fputs("Invalid patch record: out of bounds\n", stderr);
-                return 0;
-            }   
+                return false;
+            }
             patch_buf += len;
         }
 
-        target_size = target_size > offset + len ? target_size : offset + len;
+        *target_size = *target_size > offset + len
+            ? *target_size
+            : offset + len;
     }
-
-    /* while (patch_buf < patch_end) { */
-    /*  */
-    /*     if (patch_buf + 3 > patch_end) { */
-    /*         fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*         return 0; */
-    /*     } */
-    /*  */
-    /*     uint32_t offset = peek_uint24(patch_buf); */
-    /*     patch_buf += 3; */
-    /*  */
-    /*     // EOF */
-    /*     if (offset == 0x454F46) { */
-    /*         if (patch_buf < patch_end) { */
-    /*             return peek_uint24(patch_buf); */
-    /*         } */
-    /*         return target_size; */
-    /*     } */
-    /*  */
-    /*     uint16_t len = peek_uint16(patch_buf); */
-    /*     patch_buf += 2; */
-    /*  */
-    /*     if (patch_buf + 2 > patch_end) { */
-    /*         fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*         return 0; */
-    /*     } */
-    /*     size_t end_offset; */
-    /*     if (len == IPS_RECORD_RLE) { */
-    /*         if (patch_buf + 3 > patch_end) { */
-    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*             return 0; */
-    /*         }    */
-    /*         uint16_t rle_len = peek_uint16(patch_buf); */
-    /*         end_offset = offset + rle_len; */
-    /*         patch_buf += 3; */
-    /*     } else { */
-    /*         if (patch_buf + len > patch_end) { */
-    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*             return 0; */
-    /*         }    */
-    /*         end_offset = offset + len; */
-    /*         patch_buf += len; */
-    /*     } */
-    /*  */
-    /*     target_size = target_size > end_offset ? target_size : end_offset; */
-    /* } */
-
-    /* return 0; */
-    /* while (memcmp(patch_buf + patch_off, "EOF", 3) != 0) { */
-    /*     if (patch_off + 5 >= patch_size) { */
-    /*         fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*         return 0; */
-    /*     } */
-    /*  */
-    /*     // big endian */
-    /*     uint32_t offset = peek_uint24(patch_buf + patch_off); */
-    /*     patch_off += 3; */
-    /*     uint16_t len = peek_uint16(patch_buf + patch_off); */
-    /*     patch_off += 2; */
-    /*     size_t end_offset; */
-    /*  */
-    /*         fprintf(stderr, "%zu %zu %zu\n", patch_off, len, patch_size); */
-    /*     if (len == IPS_RECORD_RLE) { */
-    /*         if (patch_off + 3 >= patch_size) { */
-    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*             return 0; */
-    /*         } */
-    /*         uint16_t rle_len = peek_uint16(patch_buf + patch_off); */
-    /*         end_offset = offset + rle_len; */
-    /*         patch_off += 3; */
-    /*     } else { */
-    /*         if (patch_off + len >= patch_size) { */
-    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*             return 0; */
-    /*         } */
-    /*         end_offset = offset + len; */
-    /*         patch_off += len; */
-    /*     } */
-    /*      */
-    /*     target_size = target_size > end_offset ? target_size : end_offset; */
-    /* } */
-
-    /* patch_off += 3; */
-    /*  */
-    /* // if present, the three bytes after EOF hold the target file size */
-    /* if (patch_size >= patch_off + 3) { */
-    /*     target_size = peek_uint24(patch_buf + patch_off); */
-    /* } */
-    /*  */
-    /* return target_size; */
 }
 
-bool pass2(uint8_t *patch_buf, size_t patch_size, uint8_t *target_buf, size_t target_size) {
-    return true;
+bool pass2(uint8_t *patch_buf, uint8_t *target_buf, size_t target_size) {
+    uint8_t *target_end = target_buf + target_size;
+    // skip header
+    patch_buf += 5;
+
+    while (true) {
+        size_t offset;
+        patch_buf = decode3(patch_buf, &offset);
+
+        // checks for the string "EOF"
+        if (offset == 0x454F46) {
+            return true;
+        }
+
+        size_t len;
+        patch_buf = decode2(patch_buf, &len);
+
+        if (len == IPS_RECORD_RLE) {
+            patch_buf = decode2(patch_buf, &len);
+            if (target_buf + len > target_end) {
+                fputs("Invalid RLE record: out of bounds\n", stderr);
+                return false;
+            }
+            memset(target_buf + offset, *patch_buf, len);
+            patch_buf++;
+        } else {
+            if (target_buf + len > target_end) {
+                fputs("Invalid record: out of bounds\n", stderr);
+                return false;
+            }
+            memcpy(target_buf + offset, patch_buf, len);
+            patch_buf += len;
+        }
+    }
 }
-
-void save(void *data, size_t size, FILE *stream) {
-    size_t offset = 0;
-    size_t written, count;
-
-    do {
-        count = size - offset < 4096 ? size - offset : 4096;
-        written = fwrite(data + offset, sizeof *data, count, stream);
-        offset += written;
-    } while (written == count && offset < size);
-}
-
-/* size_t decode(uint8_t *data, size_t offset, size_t size, size_t *value) { */
-/*     size_t shift = 0; */
-/*     size_t read = 0; */
-/*     *value = 0; */
-/*  */
-/*     while (offset + read < size) { */
-/*         uint8_t next = data[offset + read++]; */
-/*         *value += (next ^ 0x80) << shift; */
-/*         if (next & 0x80) return read; */
-/*         shift += 7; */
-/*     }; */
-/*  */
-/*     return read; */
-/* } */
 
 bool ipspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
-    /* uint8_t *source_buf = NULL; */
     uint8_t *patch_buf = NULL;
     uint8_t *target_buf = NULL;
     bool success = false;
@@ -270,73 +132,32 @@ bool ipspatch(FILE *source_fp, FILE *patch_fp, FILE *target_fp) {
         goto end;
     }
 
-    patch_buf = load(patch_size, patch_fp);
+    patch_buf = fload(patch_size, patch_fp);
     if (ferror(patch_fp)) {
         perror("Unable to read from patch file");
         goto end;
     }
 
-    size_t target_size = pass1(patch_buf, patch_size);
-    fprintf(stderr, "RETVAL: %lu\n", target_size);
-    if (target_size == 0) {
+    size_t target_size;
+    if (!pass1(patch_buf, patch_size, &target_size)) {
         goto end;
     }
 
+    target_buf = fload(target_size, source_fp);
+    if (ferror(patch_fp)) {
+        perror("Unable to read from source file");
+        goto end;
+    }
 
+    if (!pass2(patch_buf, target_buf, target_size)) {
+        goto end;
+    }
 
-    /* target_buf = load(target_size, source_fp); */
-    /* success = pass2(patch_buf, patch_size, target_buf, target_size); */
-
-
-    /* size_t target_off = 0; */
-    /* while (!feof(source_fp) && target_off < target_size) { */
-    /*     size_t count = target_size - offset < 4096 ? target_size - offset : 4096; */
-    /*     size_t read = fread(target_buf + target_off,  */
-    /*                         sizeof *target_buf, count, target_fp); */
-    /*     target_off += read; */
-    /* } */
-
-    /* if (memcmp(patch_buf, "PATCH", 5) != 0) { */
-    /*     fputs("Invalid or corrupt patch file\n", stderr); */
-    /*     goto end; */
-    /* } */
-    /*  */
-    /* size_t patch_off = 5; */
-    /* while (memcmp(patch_buf + patch_off, "EOF", 3) != 0) { */
-    /*     if (patch_off + 5 >= patch_size) { */
-    /*         fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*         goto end; */
-    /*     } */
-    /*  */
-    /*     // big endian */
-    /*     uint32_t offset = (patch_buf[patch_off] << 16) & 0xFF0000 + */
-    /*                       (patch_buf[patch_off + 1] << 8) & 0xFF00 + */
-    /*                       patch_buf[patch_off + 2]; */
-    /*     uint16_t len = (patch_buf[patch_off + 3] << 8) & 0xFF00 + */
-    /*                    patch_buf[patch_off + 4]; */
-    /*     patch_off += 5; */
-    /*  */
-    /*     if (len == IPS_RECORD_RLE) { */
-    /*         if (patch_off + 3 >= patch_size) { */
-    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*             goto end; */
-    /*         } */
-    /*  */
-    /*         uint16_t rle_len = (patch_buf[patch_off + 5] << 8) & 0xFF00 + */
-    /*                            patch_buf[patch_off + 6]; */
-    /*         uint8_t byte = patch_buf[patch_off + 7]; */
-    /*  */
-    /*         memset(target_buf + target_off, byte, len); */
-    /*         patch_off += 3; */
-    /*     } else { */
-    /*         if (patch_off + len >= patch_size) { */
-    /*             fputs("Invalid patch record: out of bounds\n", stderr); */
-    /*             goto end; */
-    /*         } */
-    /*         memcpy(target_buf + target_off, patch_buf + patch_off, len); */
-    /*         patch_off += len; */
-    /*     } */
-    /* } */
+    fsave(target_buf, target_size, target_fp);
+    if (ferror(target_fp)) {
+        perror("Unable to write to target file");
+        goto end;
+    }
 
     success = true;
 
@@ -361,7 +182,7 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "-i") == 0 && i + 1 < argc) {
             source = fopen(argv[++i], "rb");
             if (source == NULL) {
-                fprintf(stderr, "Unable to open source file %s: %s\n", 
+                fprintf(stderr, "Unable to open source file %s: %s\n",
                         argv[i], strerror(errno));
                 goto end;
             }
@@ -369,7 +190,7 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             target = fopen(argv[++i], "wb");
             if (target == NULL) {
-                fprintf(stderr, "Unable to open target file %s: %s\n", 
+                fprintf(stderr, "Unable to open target file %s: %s\n",
                         argv[i], strerror(errno));
                 goto end;
             }
@@ -377,7 +198,7 @@ int main(int argc, char *argv[]) {
         else if (i == argc - 1) {
             patch = fopen(argv[i], "rb");
             if (patch == NULL) {
-                fprintf(stderr, "Unable to open patch file %s: %s\n", 
+                fprintf(stderr, "Unable to open patch file %s: %s\n",
                         argv[i], strerror(errno));
                 goto end;
             }
@@ -404,3 +225,4 @@ end:
     if (target != stdout) fclose(target);
     return exitcode;
 }
+
